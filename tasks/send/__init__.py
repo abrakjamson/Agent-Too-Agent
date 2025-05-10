@@ -20,7 +20,7 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
 
         if not user_input or not session_id:
             return func.HttpResponse(
-                "Missing user_input or session_id in the request.",
+                f"did not find user_input or session_id in the request. {user_input} {session_id}",
                 status_code=400
             )
 

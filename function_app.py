@@ -12,8 +12,13 @@ def test_http(req: func.HttpRequest) -> func.HttpResponse:
     if not name:
         try:
             req_body = req.get_json()
+            logging.info(f"Request Body: {req_body}")
         except ValueError:
-            pass
+            logging.error("Invalid JSON in request body.")
+            return func.HttpResponse(
+                "Invalid JSON in request body.",
+                status_code=400
+            )
         else:
             name = req_body.get('name')
 
@@ -31,13 +36,28 @@ async def send_task(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Processing /tasks/send request.')
 
     try:
+        # Log request headers
+        logging.info(f"Request Headers: {req.headers}")
+
+        # Log request body
+        try:
+            req_body = req.get_json()  # Remove 'await' as get_json() is synchronous
+            logging.info(f"Request Body: {req_body}")
+        except ValueError:
+            logging.error("Invalid JSON in request body.")
+            return func.HttpResponse(
+                "Invalid JSON in request body.",
+                status_code=400
+            )
+
         # Extract user input and session ID from the request
-        user_input = req.params.get('user_input')
-        session_id = req.params.get('session_id')
+        user_input = req_body.get('user_input')
+        session_id = req_body.get('session_id')
 
         if not user_input or not session_id:
+            logging.warning(f"Missing parameters: user_input={user_input}, session_id={session_id}")
             return func.HttpResponse(
-                "Missing user_input or session_id in the request.",
+                f"{user_input} {session_id} did not find user_input or session_id in the request.",
                 status_code=400
             )
 
@@ -55,8 +75,8 @@ async def send_task(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     except Exception as e:
-        logging.error(f"Error processing /tasks/send request: {e}")
+        logging.error(f"An error occurred: {e}")
         return func.HttpResponse(
-            "An error occurred while processing the request.",
+            "An internal error occurred.",
             status_code=500
         )
