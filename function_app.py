@@ -1,5 +1,6 @@
 import azure.functions as func
 import logging
+import json
 from samples.agents.semantickernel.agent import SemanticKernelTravelAgent
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -66,17 +67,31 @@ async def send_task(req: func.HttpRequest) -> func.HttpResponse:
 
         # Invoke the agent to handle the task
         response = await travel_agent.invoke(user_input, session_id)
+        
+        # Convert the response to JSON string
+        if isinstance(response, dict):
+            response_json = json.dumps(response)
+        else:
+            response_json = json.dumps({"message": str(response)})
+
+        # Log the response for debugging
+        logging.info(f"Agent response: {response_json}")
 
         # Return the response as JSON
         return func.HttpResponse(
-            body=response,
+            body=response_json,
             status_code=200,
             mimetype="application/json"
         )
 
     except Exception as e:
-        logging.error(f"An error occurred: {e}")
+        logging.error(f"(function_app) An error occurred: {e}")
+        error_response = json.dumps({
+            "error": "An internal error occurred",
+            "details": str(e)
+        })
         return func.HttpResponse(
-            "An internal error occurred.",
-            status_code=500
+            body=error_response,
+            status_code=500,
+            mimetype="application/json"
         )
