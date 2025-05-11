@@ -1,4 +1,4 @@
-from common.types import (
+from samples.common.types import (
     ContentTypeNotSupportedError,
     JSONRPCResponse,
     UnsupportedOperationError,

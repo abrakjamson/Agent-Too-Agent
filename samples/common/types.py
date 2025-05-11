@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
 from pydantic import (
@@ -36,7 +36,7 @@ class FileContent(BaseModel):
     uri: str | None = None
 
     @model_validator(mode='after')
-    def check_content(self) -> Self:
+    def check_content(self) -> "FileContent":
         if not (self.bytes or self.uri):
             raise ValueError(
                 "Either 'bytes' or 'uri' must be present in the file data"

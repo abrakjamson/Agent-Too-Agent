@@ -7,3 +7,7 @@ httpx
 python-dotenv
 pydantic
 semantic-kernel
+click
+starlette
+sse-starlette
+jwcrypto

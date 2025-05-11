@@ -10,8 +10,8 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from common.server.task_manager import TaskManager
-from common.types import (
+from samples.common.server.task_manager import TaskManager
+from samples.common.types import (
     A2ARequest,
     AgentCard,
     CancelTaskRequest,

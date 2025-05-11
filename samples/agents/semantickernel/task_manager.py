@@ -3,9 +3,9 @@ import logging
 
 from collections.abc import AsyncIterable
 
-from agents.semantickernel.agent import SemanticKernelTravelAgent
-from common.server.task_manager import InMemoryTaskManager
-from common.types import (
+from samples.agents.semantickernel.agent import SemanticKernelTravelAgent
+from samples.common.server.task_manager import InMemoryTaskManager
+from samples.common.types import (
     Artifact,
     InternalError,
     InvalidParamsError,
@@ -20,7 +20,7 @@ from common.types import (
     TaskStatus,
     TaskStatusUpdateEvent,
 )
-from common.utils.push_notification_auth import PushNotificationSenderAuth
+from samples.common.utils.push_notification_auth import PushNotificationSenderAuth
 
 
 logger = logging.getLogger(__name__)

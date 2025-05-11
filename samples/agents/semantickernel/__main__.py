@@ -2,10 +2,10 @@ import logging
 
 import click
 
-from agents.semantickernel.task_manager import TaskManager
-from common.server import A2AServer
-from common.types import AgentCapabilities, AgentCard, AgentSkill
-from common.utils.push_notification_auth import PushNotificationSenderAuth
+from samples.agents.semantickernel.task_manager import TaskManager
+from samples.common.server import A2AServer
+from samples.common.utils.push_notification_auth import PushNotificationSenderAuth
+from samples.agents.semantickernel.agent_card import agent_card  # Import the AgentCard from the new module
 from dotenv import load_dotenv
 
 
@@ -20,35 +20,6 @@ load_dotenv()
 @click.option('--port', default=10020)
 def main(host, port):
     """Starts the Semantic Kernel Agent server using A2A."""
-    # Build the agent card
-    capabilities = AgentCapabilities(streaming=True, pushNotifications=True)
-    skill_trip_planning = AgentSkill(
-        id='trip_planning_sk',
-        name='Semantic Kernel Trip Planning',
-        description=(
-            'Handles comprehensive trip planning, including currency exchanges, itinerary creation, sightseeing, '
-            'dining recommendations, and event bookings using Frankfurter API for currency conversions.'
-        ),
-        tags=['trip', 'planning', 'travel', 'currency', 'semantic-kernel'],
-        examples=[
-            'Plan a budget-friendly day trip to Seoul including currency exchange.',
-            "What's the exchange rate and recommended itinerary for visiting Tokyo?",
-        ],
-    )
-
-    agent_card = AgentCard(
-        name='SK Travel Agent',
-        description=(
-            'Semantic Kernel-based travel agent providing comprehensive trip planning services '
-            'including currency exchange and personalized activity planning.'
-        ),
-        url=f'http://{host}:{port}/',
-        version='1.0.0',
-        defaultInputModes=['text'],
-        defaultOutputModes=['text'],
-        capabilities=capabilities,
-        skills=[skill_trip_planning],
-    )
 
     # Prepare push notification system
     notification_sender_auth = PushNotificationSenderAuth()
@@ -59,7 +30,10 @@ def main(host, port):
         notification_sender_auth=notification_sender_auth
     )
     server = A2AServer(
-        agent_card=agent_card, task_manager=task_manager, host=host, port=port
+        agent_card=agent_card,  # Use the imported AgentCard
+        task_manager=task_manager,
+        host=host,
+        port=port
     )
     server.app.add_route(
         '/.well-known/jwks.json',

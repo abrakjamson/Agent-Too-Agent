@@ -2,8 +2,23 @@ import azure.functions as func
 import logging
 import json
 from samples.agents.semantickernel.agent import SemanticKernelTravelAgent
+from samples.agents.semantickernel.agent_card import agent_card  # Import the existing AgentCard
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+@app.route(route=".well-known/agent.json")
+def get_agent_card(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Serving the AgentCard JSON.')
+    try:
+        # Use the existing agent_card from agent_card.py
+        agent_card_json = json.dumps(agent_card, default=lambda o: o.__dict__)
+        return func.HttpResponse(agent_card_json, mimetype='application/json')
+    except Exception as e:
+        logging.error(f"Error generating AgentCard JSON: {e}")
+        return func.HttpResponse(
+            "Error generating AgentCard JSON.",
+            status_code=500
+        )
 
 @app.route(route="test_http")
 def test_http(req: func.HttpRequest) -> func.HttpResponse:
