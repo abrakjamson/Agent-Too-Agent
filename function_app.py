@@ -6,6 +6,9 @@ from samples.agents.semantickernel.agent_card import agent_card  # Import the ex
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
+# Initialize the SemanticKernelTravelAgent
+travel_agent = SemanticKernelTravelAgent()
+
 @app.route(route=".well-known/agent.json")
 def get_agent_card(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Serving the AgentCard JSON.')
@@ -77,9 +80,6 @@ async def send_task(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=400
             )
 
-        # Initialize the Semantic Kernel Travel Agent
-        travel_agent = SemanticKernelTravelAgent()
-
         # Invoke the agent to handle the task
         response = await travel_agent.invoke(user_input, session_id)
         
@@ -109,4 +109,42 @@ async def send_task(req: func.HttpRequest) -> func.HttpResponse:
             body=error_response,
             status_code=500,
             mimetype="application/json"
+        )
+
+@app.route(route="tasks/sendSubscribe")
+async def send_subscribe(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Processing sendSubscribe request.')
+
+    try:
+        # Parse the request body
+        req_body = req.get_json()
+        user_input = req_body.get('user_input')
+        session_id = req_body.get('session_id')
+
+        if not user_input or not session_id:
+            logging.error("Missing user_input or session_id in request.")
+            return func.HttpResponse(
+                "(function_app) Missing user_input or session_id in request.",
+                status_code=400
+            )
+
+        # Stream the response using the SemanticKernelTravelAgent
+        response_stream = travel_agent.stream(user_input, session_id)
+
+        # Collect and yield responses
+        response_data = []
+        async for response in response_stream:
+            response_data.append(response)
+
+        # Return the collected responses as JSON
+        return func.HttpResponse(
+            json.dumps(response_data),
+            mimetype='application/json'
+        )
+
+    except Exception as e:
+        logging.error(f"(function_app) Error processing sendSubscribe request: {e}")
+        return func.HttpResponse(
+            "Error processing request.",
+            status_code=500
         )
