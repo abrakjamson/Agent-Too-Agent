@@ -13,8 +13,12 @@ travel_agent = SemanticKernelTravelAgent()
 def get_agent_card(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Serving the AgentCard JSON.')
     try:
-        # Use the existing agent_card from agent_card.py
-        agent_card_json = json.dumps(agent_card, default=lambda o: o.__dict__)
+        # Override the URL based on the request
+        modified_card = agent_card.model_copy()
+        base_url = str(req.url).rsplit('/.well-known/agent.json', 1)[0]
+        modified_card.url = base_url + '/'
+        
+        agent_card_json = json.dumps(modified_card, default=lambda o: o.__dict__)
         return func.HttpResponse(agent_card_json, mimetype='application/json')
     except Exception as e:
         logging.error(f"Error generating AgentCard JSON: {e}")
