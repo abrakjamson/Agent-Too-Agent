@@ -1,6 +1,7 @@
 import azure.functions as func
 import logging
 import json
+import asyncio  # Import asyncio
 from samples.agents.semantickernel.agent import SemanticKernelTravelAgent
 from samples.agents.semantickernel.agent_card import agent_card  # Import the existing AgentCard
 
@@ -53,102 +54,66 @@ def test_http(req: func.HttpRequest) -> func.HttpResponse:
             status_code=400
         )
 
-@app.route(route="tasks/send", methods=["POST"])
-async def send_task(req: func.HttpRequest) -> func.HttpResponse:
-    """Handle the /tasks/send function for sending tasks."""
-    logging.info('Processing /tasks/send request.')
-
+@app.route(route="jsonrpc", methods=["POST"])
+async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        # Log request headers
-        logging.info(f"Request Headers: {req.headers}")
-
-        # Log request body
-        try:
-            req_body = req.get_json()  # Remove 'await' as get_json() is synchronous
-            logging.info(f"Request Body: {req_body}")
-        except ValueError:
-            logging.error("Invalid JSON in request body.")
-            return func.HttpResponse(
-                "Invalid JSON in request body.",
-                status_code=400
-            )
-
-        # Extract user input and session ID from the request
-        user_input = req_body.get('user_input')
-        session_id = req_body.get('session_id')
-
-        if not user_input or not session_id:
-            logging.warning(f"Missing parameters: user_input={user_input}, session_id={session_id}")
-            return func.HttpResponse(
-                f"{user_input} {session_id} did not find user_input or session_id in the request.",
-                status_code=400
-            )
-
-        # Invoke the agent to handle the task
-        response = await travel_agent.invoke(user_input, session_id)
-        
-        # Convert the response to JSON string
-        if isinstance(response, dict):
-            response_json = json.dumps(response)
-        else:
-            response_json = json.dumps({"message": str(response)})
-
-        # Log the response for debugging
-        logging.info(f"Agent response: {response_json}")
-
-        # Return the response as JSON
-        return func.HttpResponse(
-            body=response_json,
-            status_code=200,
-            mimetype="application/json"
-        )
-
-    except Exception as e:
-        logging.error(f"(function_app) An error occurred: {e}")
-        error_response = json.dumps({
-            "error": "An internal error occurred",
-            "details": str(e)
-        })
-        return func.HttpResponse(
-            body=error_response,
-            status_code=500,
-            mimetype="application/json"
-        )
-
-@app.route(route="tasks/sendSubscribe")
-async def send_subscribe(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info('Processing sendSubscribe request.')
-
-    try:
-        # Parse the request body
         req_body = req.get_json()
-        user_input = req_body.get('user_input')
-        session_id = req_body.get('session_id')
+        method = req_body.get("method")
+        params = req_body.get("params", {})
+        request_id = req_body.get("id")
 
-        if not user_input or not session_id:
-            logging.error("Missing user_input or session_id in request.")
+        if method == "send_task":
+            user_input = params.get("user_input")
+            session_id = params.get("session_id")
+            result = await travel_agent.invoke(user_input, session_id)
+            response = {"jsonrpc": "2.0", "result": result, "id": request_id}
+            return func.HttpResponse(json.dumps(response), mimetype="application/json")
+
+        elif method == "send_subscribe":
+            user_input = params.get("user_input")
+            session_id = params.get("session_id")
+            
+            async def generate_events():
+                async for response_item in travel_agent.stream(user_input, session_id):
+                    # Wrap each item in the stream as a TaskStatusUpdateEvent
+                    event_data = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "result": {
+                            "id": request_id,
+                            "status": {"state": "working", "message": {"role": "agent", "parts": [{"type": "text", "text": str(response_item)}]}},  # Adjust as needed
+                            "final": False  # Set to True for the last event
+                        }
+                    }
+                    yield f"data: {json.dumps(event_data)}\n\n"
+                
+                # Send a final event to signal completion
+                final_event_data = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": {
+                        "id": request_id,
+                        "status": {"state": "completed", "message": {"role": "agent", "parts": [{"type": "text", "text": "Streaming complete."}]}},
+                        "final": True
+                    }
+                }
+                yield f"data: {json.dumps(final_event_data)}\n\n"
+
             return func.HttpResponse(
-                "(function_app) Missing user_input or session_id in request.",
-                status_code=400
+                generate_events(),
+                mimetype="text/event-stream",
             )
-
-        # Stream the response using the SemanticKernelTravelAgent
-        response_stream = travel_agent.stream(user_input, session_id)
-
-        # Collect and yield responses
-        response_data = []
-        async for response in response_stream:
-            response_data.append(response)
-
-        # Return the collected responses as JSON
-        return func.HttpResponse(
-            json.dumps(response_data),
-            mimetype='application/json'
-        )
-
+        else:
+            response = {
+                "jsonrpc": "2.0",
+                "error": {"code": -32601, "message": "Method not found"},
+                "id": request_id
+            }
+            return func.HttpResponse(json.dumps(response), mimetype="application/json")
     except Exception as e:
-        logging.error(f"(function_app) Error processing sendSubscribe request: {e}")
-        return func.HttpResponse(
-            "Error processing request.",
-            status_code=500
-        )
+        error_response = {
+            "jsonrpc": "2.0",
+            "error": {"code": -32603, "message": "Internal error", "data": str(e)},
+            "id": req_body.get("id") if 'req_body' in locals() else None
+        }
+        return func.HttpResponse(json.dumps(error_response), status_code=500, mimetype="application/json")
