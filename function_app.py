@@ -60,16 +60,17 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
         req_body = req.get_json()
         method = req_body.get("method")
         params = req_body.get("params", {})
-        request_id = req_body.get("id")
+        task_id = req_body.get("id")
 
-        if method == "send_task":
-            user_input = params.get("user_input")
-            session_id = params.get("session_id")
+        if method == "tasks/send":
+            user_input = params.get("message")
+            #TODO check these IDs
+            session_id = params.get("sessionId")
             result = await travel_agent.invoke(user_input, session_id)
-            response = {"jsonrpc": "2.0", "result": result, "id": request_id}
+            response = {"jsonrpc": "2.0", "result": result, "id": task_id}
             return func.HttpResponse(json.dumps(response), mimetype="application/json")
 
-        elif method == "send_subscribe":
+        elif method == "tasks/sendSubscribe":
             user_input = params.get("user_input")
             session_id = params.get("session_id")
             
@@ -78,9 +79,9 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
                     # Wrap each item in the stream as a TaskStatusUpdateEvent
                     event_data = {
                         "jsonrpc": "2.0",
-                        "id": request_id,
+                        "id": task_id,
                         "result": {
-                            "id": request_id,
+                            "id": task_id,
                             "status": {"state": "working", "message": {"role": "agent", "parts": [{"type": "text", "text": str(response_item)}]}},  # Adjust as needed
                             "final": False  # Set to True for the last event
                         }
@@ -90,9 +91,9 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
                 # Send a final event to signal completion
                 final_event_data = {
                     "jsonrpc": "2.0",
-                    "id": request_id,
+                    "id": task_id,
                     "result": {
-                        "id": request_id,
+                        "id": task_id,
                         "status": {"state": "completed", "message": {"role": "agent", "parts": [{"type": "text", "text": "Streaming complete."}]}},
                         "final": True
                     }
@@ -107,7 +108,7 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
             response = {
                 "jsonrpc": "2.0",
                 "error": {"code": -32601, "message": "Method not found"},
-                "id": request_id
+                "id": task_id
             }
             return func.HttpResponse(json.dumps(response), mimetype="application/json")
     except Exception as e:

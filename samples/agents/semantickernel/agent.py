@@ -167,7 +167,8 @@ class SemanticKernelTravelAgent:
         Returns:
             dict: A dictionary containing the content, task completion status, and user input requirement.
         """
-        await self._ensure_thread_exists(session_id)
+        # TESTING to see if this is causing the error
+        # await self._ensure_thread_exists(session_id)
 
         # Use SK's get_response for a single shot
         response = await self.agent.get_response(
