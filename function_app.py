@@ -3,6 +3,7 @@ import logging
 import json
 import asyncio  # Import asyncio
 import debugpy
+from starlette.responses import StreamingResponse
 from samples.agents.semantickernel.agent import SemanticKernelTravelAgent
 from samples.agents.semantickernel.agent_card import agent_card  # Import the existing AgentCard
 
@@ -11,6 +12,14 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 # Initialize the SemanticKernelTravelAgent
 travel_agent = SemanticKernelTravelAgent()
+
+async def generate_sse_events(response_stream):
+    """Manually formats responses for SSE and sends chunks."""
+    async for response in response_stream:
+        formatted_event = f"data: {json.dumps(response)}\n\n"  # Ensure SSE format
+        yield formatted_event.encode("utf-8")  # Send chunks in byte format
+
+        await asyncio.sleep(0.1)  # Prevents buffering issues for real-time streaming
 
 @app.route(route=".well-known/agent.json")
 def get_agent_card(req: func.HttpRequest) -> func.HttpResponse:
@@ -95,60 +104,37 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse(json.dumps(response), mimetype="application/json")
 
         elif method == "message/sendSubscribe":
-            # For streaming requests, extract the user message and session ID
-            session_id = params.get("sessionId")
-            # TODO error handling
-            user_message = next(
-                (part["text"] for part in message_obj.get("parts", []) if part.get("kind") == "text"),
-                ""
-            )
-            
-            # Build the Message object as above
-            message_obj = {
-                "role": "user",
-                "parts": [
-                    {"kind": "text", "text": user_message}
-                ],
-                "messageId": jsonrpc_id,
-                "kind": "message"
-            }
+            try:
+                req_body = req.get_json()
+                params = req_body.get("params", {})
+                session_id = params.get("sessionId")
+                message_obj = params.get("message", {})
 
-            async def generate_events():
-                # Stream updates from the updated travel_agent method.
-                # Each update is expected to be a Task or a Task-status update, per the A2A spec.
-                async for task_update in travel_agent.stream_message(message_obj, session_id):
-                    event_data = {
-                        "jsonrpc": "2.0",
-                        "id": jsonrpc_id,
-                        "result": {
-                            "task": task_update,
-                            "final": False
-                        }
-                    }
-                    yield f"data: {json.dumps(event_data)}\n\n"
-                
-                # Send a final event to indicate the end of streaming.
-                final_event_data = {
-                    "jsonrpc": "2.0",
-                    "id": jsonrpc_id,
-                    "result": {
-                        "final": True
-                    }
-                }
-                yield f"data: {json.dumps(final_event_data)}\n\n"
+                if not message_obj or not session_id:
+                    logging.error("Missing message or sessionId in request.")
+                    return func.HttpResponse(
+                        "(function_app) Missing message or sessionId in request.",
+                        status_code=400
+                    )
 
-            return func.HttpResponse(
-                generate_events(),
-                mimetype="text/event-stream",
-            )
-        else:
-            # Method not found; reply with the standard JSON-RPC error structure.
-            response = {
-                "jsonrpc": "2.0",
-                "error": {"code": -32601, "message": "Method not found. This server is designed for Agent2Agent 0.2.1"},
-                "id": jsonrpc_id
-            }
-            return func.HttpResponse(json.dumps(response), mimetype="application/json")
+                # Stream the response using the updated travel_agent method
+                response_stream = travel_agent.stream(message_obj, session_id)
+
+                # Return manually formatted SSE response using chunked transfer encoding
+                return func.HttpResponse(
+                    generate_sse_events(response_stream),
+                    mimetype="text/event-stream",
+                    status_code=200
+                )
+
+            except Exception as e:
+                logging.error(f"Error processing sendSubscribe: {str(e)}")
+                return func.HttpResponse(
+                    json.dumps({"error": "Internal server error", "details": str(e)}),
+                    status_code=500,
+                    mimetype="application/json"
+                )
+    
     except Exception as e:
         error_response = {
             "jsonrpc": "2.0",

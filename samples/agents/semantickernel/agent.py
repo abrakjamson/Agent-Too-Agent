@@ -1,5 +1,8 @@
 import logging
 import os
+import uuid
+import datetime
+from datetime import timezone
 
 from collections.abc import AsyncIterable
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -192,25 +195,30 @@ class SemanticKernelTravelAgent:
         return self._get_agent_response(response.content)
 
 
-    async def stream(
-        self, user_input: str, session_id: str
-    ) -> AsyncIterable[dict[str, Any]]:
-        """For streaming tasks (like tasks/sendSubscribe), we yield partial progress using SK agent's invoke_stream.
-
-        Args:
-            user_input (str): User input message.
-            session_id (str): Unique identifier for the session.
-
-        Yields:
-            dict: A dictionary containing the content, task completion status, and user input requirement.
+    async def stream(self, message_obj: dict, session_id: str) -> AsyncIterable[dict[str, any]]:
         """
-        await self._ensure_thread_exists(session_id)
-
+        Streams incremental updates for messages/sendSubscribe.
+        Yields structured task updates that follow the A2A protocol in a combined function.
+        
+        Args:
+        message_obj (dict): Structured message object from the request.
+        session_id (str): Unique session ID.
+        
+        Yields:
+        dict: A structured A2A task update (incremental or final).
+        """
         chunks: list[StreamingChatMessageContent] = []
 
-        # For the sample, to avoid too many messages, only show one "in-progress" message for each task
+        # Extract the user text from the message parts.
+        user_input = next(
+            (part.get("text", "") for part in message_obj.get("parts", []) if part.get("kind") == "text"),
+            ""
+        )
+
         tool_call_in_progress = False
         message_in_progress = False
+
+        # Stream incremental response chunks from the agent.
         async for response_chunk in self.agent.invoke_stream(
             messages=user_input,
             thread=self.thread,
@@ -221,82 +229,88 @@ class SemanticKernelTravelAgent:
             ):
                 if not tool_call_in_progress:
                     yield {
-                        'is_task_complete': False,
-                        'require_user_input': False,
-                        'content': 'Processing the trip plan (with plugins)...',
+                        "task": {
+                            "id": message_obj.get("messageId"),
+                            "contextId": session_id,
+                            "status": "working",
+                            "message": {
+                                "role": "agent",
+                                "parts": [{
+                                    "kind": "text", 
+                                    "text": "Processing the trip plan (with plugins)..."
+                                }],
+                                "messageId": str(uuid.uuid4()),
+                                "kind": "message"
+                            }
+                        }
                     }
                     tool_call_in_progress = True
+
             elif any(
                 isinstance(item, StreamingTextContent)
                 for item in response_chunk.items
             ):
                 if not message_in_progress:
                     yield {
-                        'is_task_complete': False,
-                        'require_user_input': False,
-                        'content': 'Building the trip plan...',
+                        "task": {
+                            "id": message_obj.get("messageId"),
+                            "contextId": session_id,
+                            "status": "working",
+                            "message": {
+                                "role": "agent",
+                                "parts": [{
+                                    "kind": "text", 
+                                    "text": "Building the trip plan..."
+                                }],
+                                "messageId": str(uuid.uuid4()),
+                                "kind": "message"
+                            }
+                        }
                     }
                     message_in_progress = True
 
                 chunks.append(response_chunk.message)
 
-        full_message = sum(chunks[1:], chunks[0])
-        yield self._get_agent_response(full_message)
+        # Aggregate the chunks to form the complete message.
+        if chunks:
+            full_message = sum(chunks[1:], chunks[0])
+        else:
+            full_message = ""
 
-    def _get_agent_response(
-        self, message: 'ChatMessageContent'
-    ) -> dict[str, Any]:
-        """Extracts the structured response from the agent's message content.
+        # Inline: transform final message into a structured task update.
+        # Attempt to validate and parse the agent's final message.
+        try:
+            if hasattr(full_message, "content"):
+                structured_response = ResponseFormat.model_validate_json(full_message.content)
+            else:
+                structured_response = ResponseFormat.model_validate_json(str(full_message))
+        except Exception:
+            structured_response = None
 
-        Args:
-            message (ChatMessageContent): The message content from the agent.
+        # Generate a timestamp in ISO 8601 format.
+        timestamp = datetime.datetime.now(timezone.utc).isoformat()
 
-        Returns:
-            dict: A dictionary containing the content, task completion status, and user input requirement.
-        """
-        structured_response = ResponseFormat.model_validate_json(
-            message.content
-        )
+        if structured_response and isinstance(structured_response, ResponseFormat):
+            final_text = structured_response.message
+            # Use the response status, mapping "completed" as expected.
+            final_state = "completed" if structured_response.status == "completed" else structured_response.status
+        else:
+            final_text = "We are unable to process your request at the moment. Please try again."
+            final_state = "error"
 
-        default_response = {
-            'is_task_complete': False,
-            'require_user_input': True,
-            'content': 'We are unable to process your request at the moment. Please try again.',
-        }
-
-        if isinstance(structured_response, ResponseFormat):
-            response_map = {
-                'input_required': {
-                    'is_task_complete': False,
-                    'require_user_input': True,
-                },
-                'error': {
-                    'is_task_complete': False,
-                    'require_user_input': True,
-                },
-                'completed': {
-                    'is_task_complete': True,
-                    'require_user_input': False,
-                },
+        # Yield final update in structured task format.
+        yield {
+            "task": {
+                "id": message_obj.get("messageId"),
+                "contextId": session_id,
+                "status": final_state,
+                "timestamp": timestamp,
+                "message": {
+                    "role": "agent",
+                    "parts": [{"kind": "text", "text": final_text}],
+                    "messageId": str(uuid.uuid4()),
+                    "kind": "message"
+                }
             }
-
-            response = response_map.get(structured_response.status)
-            if response:
-                return {**response, 'content': structured_response.message}
-
-        return default_response
-
-    async def _ensure_thread_exists(self, session_id: str) -> None:
-        """Ensure the thread exists for the given session ID.
-
-        Args:
-            session_id (str): Unique identifier for the session.
-        """
-        # Replace check with self.thread.id when
-        # https://github.com/microsoft/semantic-kernel/issues/11535 is fixed
-        if self.thread is None or self.thread._thread_id != session_id:
-            await self.thread.delete() if self.thread else None
-            self.thread = ChatHistoryAgentThread(thread_id=session_id)
-
-
+        }
 # endregion
