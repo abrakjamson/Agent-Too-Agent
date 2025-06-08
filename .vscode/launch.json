@@ -15,9 +15,8 @@
             "request": "attach",
             "connect": {
                 "host": "localhost",
-                "port": 7071
-            },
-            "preLaunchTask": "func: host start"
+                "port": 5678
+            }
         }
     ]
 }

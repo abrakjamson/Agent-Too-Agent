@@ -11,3 +11,4 @@ click
 starlette
 sse-starlette
 jwcrypto
+debugpy

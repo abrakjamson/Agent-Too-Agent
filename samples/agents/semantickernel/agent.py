@@ -157,25 +157,40 @@ class SemanticKernelTravelAgent:
             ),
         )
 
-    async def invoke(self, user_input: str, session_id: str) -> dict[str, Any]:
-        """Handle synchronous tasks (like tasks/send).
+    async def send_message(self, message: dict, session_id: str) -> dict[str, Any]:
+        """
+        Handle synchronous messages (akin to message/send).
 
         Args:
-            user_input (str): User input message.
+            message (dict): A structured Message object following the A2A specification.
+                            Expected to include a "role", a list of "parts" (e.g., a text part),
+                            a unique message ID in "messageId", and a fixed "kind" ("message").
             session_id (str): Unique identifier for the session.
 
         Returns:
-            dict: A dictionary containing the content, task completion status, and user input requirement.
+            dict: A Task object (or equivalent result) that encapsulates
+                the agent's response, including content, status, and any task-related metadata.
         """
-        # TESTING to see if this is causing the error
+        # Ensure the session/thread is established.
         # await self._ensure_thread_exists(session_id)
+        
+        # Extract the text content from the message parts.
+        # (This example assumes the first 'text' part is the user input.)
+        user_text = ""
+        for part in message.get("parts", []):
+            if part.get("kind") == "text":
+                user_text = part.get("text", "")
+                break
 
-        # Use SK's get_response for a single shot
+        # Use the existing underlying mechanism to get a response.
         response = await self.agent.get_response(
-            messages=user_input,
+            messages=user_text,
             thread=self.thread,
         )
+        
+        # Convert the raw response content into a Task structure in line with the A2A spec.
         return self._get_agent_response(response.content)
+
 
     async def stream(
         self, user_input: str, session_id: str

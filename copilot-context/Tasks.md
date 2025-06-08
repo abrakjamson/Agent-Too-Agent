@@ -5,3 +5,4 @@
 3. Implement connecting to multiple servers with sidebar
 4. Implement passthrough
 5. Implement supervised sidebar / supervised passthrough
+6. Repair the task manager on the server to keep conversation history
