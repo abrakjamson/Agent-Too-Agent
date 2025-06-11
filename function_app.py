@@ -1,25 +1,39 @@
 import azure.functions as func
 import logging
 import json
-import asyncio  # Import asyncio
+import asyncio
 import debugpy
-from starlette.responses import StreamingResponse
+from starlette.responses import StreamingResponse  # (Unused, but you can remove if not needed)
 from samples.agents.semantickernel.agent import SemanticKernelTravelAgent
-from samples.agents.semantickernel.agent_card import agent_card  # Import the existing AgentCard
+from samples.agents.semantickernel.agent_card import agent_card  # Existing AgentCard
 
-debugpy.listen(("localhost", 5678))  # Start the debugger on port 5678
+# Start the debugger on port 5678
+debugpy.listen(("localhost", 5678))  
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 # Initialize the SemanticKernelTravelAgent
 travel_agent = SemanticKernelTravelAgent()
 
+def sync_generator(async_gen):
+    loop = asyncio.new_event_loop()
+    while True:
+        try:
+            chunk = loop.run_until_complete(async_gen.__anext__())
+            yield chunk.encode("utf-8")  # Convert each chunk to bytes
+        except StopAsyncIteration:
+            break
+    loop.close()
+
 async def generate_sse_events(response_stream):
-    """Manually formats responses for SSE and sends chunks."""
+    """
+    Async generator that reads responses from the travel agent's stream,
+    formats each one as an SSE event (with the 'data:' prefix and two newlines),
+    and yields the event as a UTF-8 encoded byte string.
+    """
     async for response in response_stream:
         formatted_event = f"data: {json.dumps(response)}\n\n"  # Ensure SSE format
-        yield formatted_event.encode("utf-8")  # Send chunks in byte format
-
-        await asyncio.sleep(0.1)  # Prevents buffering issues for real-time streaming
+        yield formatted_event.encode("utf-8")  # Send chunks as bytes
+        await asyncio.sleep(0.1)  # Small delay to allow flushing
 
 @app.route(route=".well-known/agent.json")
 def get_agent_card(req: func.HttpRequest) -> func.HttpResponse:
@@ -75,7 +89,7 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
         jsonrpc_id = req_body.get("id")
 
         if method == "message/send":
-            # TODO error handling
+            # TODO: Add error handling as needed
             user_message = next(
                 (part["text"] for part in message_obj.get("parts", []) if part.get("kind") == "text"),
                 ""
@@ -83,11 +97,7 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
 
             session_id = params.get("sessionId")
             
-            # Construct the Message object per the A2A Protocol:
-            # - "role" is set to "user"
-            # - "parts" contains a single TextPart carrying the user's text
-            # - "messageId" is assigned (here we reuse the JSON-RPC id)
-            # - "kind" is fixed as "message"
+            # Construct the Message object per the A2A protocol
             message_obj = {
                 "role": "user",
                 "parts": [
@@ -97,8 +107,7 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
                 "kind": "message"
             }
             
-            # Send the message using an updated travel_agent function.
-            # It now returns a Task object or similar response per the new specification.
+            # Send the message using the travel_agent's send_message method.
             result = await travel_agent.send_message(message_obj, session_id)
             response = {"jsonrpc": "2.0", "result": result, "id": jsonrpc_id}
             return func.HttpResponse(json.dumps(response), mimetype="application/json")
@@ -117,15 +126,17 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
                         status_code=400
                     )
 
-                # Stream the response using the updated travel_agent method
+                # Obtain the response stream from the travel agent
                 response_stream = travel_agent.stream(message_obj, session_id)
 
-                # Return manually formatted SSE response using chunked transfer encoding
-                return func.HttpResponse(
-                    generate_sse_events(response_stream),
-                    mimetype="text/event-stream",
-                    status_code=200
-                )
+                # Collect async generator results into a list instead of awaiting it directly
+                response_data = []
+                async for response in response_stream:
+                    response_data.append(f"data: {json.dumps(response)}\n\n")
+
+                # This actually joins all the intermediate and final response into a single string
+                # it isn't a proper implementation of SSE
+                return func.HttpResponse("".join(response_data), mimetype="text/event-stream")
 
             except Exception as e:
                 logging.error(f"Error processing sendSubscribe: {str(e)}")
@@ -134,7 +145,7 @@ async def jsonrpc_handler(req: func.HttpRequest) -> func.HttpResponse:
                     status_code=500,
                     mimetype="application/json"
                 )
-    
+        
     except Exception as e:
         error_response = {
             "jsonrpc": "2.0",

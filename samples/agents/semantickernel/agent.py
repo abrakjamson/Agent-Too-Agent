@@ -3,6 +3,7 @@ import os
 import uuid
 import datetime
 from datetime import timezone
+import json
 
 from collections.abc import AsyncIterable
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -191,9 +192,34 @@ class SemanticKernelTravelAgent:
             thread=self.thread,
         )
         
-        # Convert the raw response content into a Task structure in line with the A2A spec.
+        # Convert the raw response content into a Message structure in line with the A2A spec.
         return self._get_agent_response(response.content)
 
+    def _get_agent_response(self, content: 'ChatMessageContent') -> dict[str, Any]:
+        """
+        Converts the agent's response content into a structured A2A Message format.
+
+        Args:
+            content (ChatMessageContent): The content returned by the agent.
+
+        Returns:
+            dict: A structured Message object.
+        """
+        innerContent = content.content if hasattr(content, 'content') else content
+        content_object = json.loads(innerContent) if isinstance(innerContent, str) else innerContent
+        if isinstance(content_object, dict) and 'message' in content_object:
+            agent_response = content_object['message']
+        return {
+            "role": "agent",
+            "parts": [
+                {
+                    "kind": "text",
+                    "text": agent_response
+                }
+            ],
+            "messageId": str(uuid.uuid4()),
+            "kind": "message"
+        }
 
     async def stream(self, message_obj: dict, session_id: str) -> AsyncIterable[dict[str, any]]:
         """
