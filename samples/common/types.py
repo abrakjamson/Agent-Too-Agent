@@ -1,372 +1,160 @@
-from datetime import datetime
-from enum import Enum
-from typing import Annotated, Any, Literal
-from uuid import uuid4
+from __future__ import annotations
+from typing import Any, Dict, List, Literal, Optional, Union
+from pydantic import BaseModel, Field, ConfigDict
+import datetime
+import uuid
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    TypeAdapter,
-    field_serializer,
-    model_validator,
-)
-
-
-class TaskState(str, Enum):
-    SUBMITTED = 'submitted'
-    WORKING = 'working'
-    INPUT_REQUIRED = 'input-required'
-    COMPLETED = 'completed'
-    CANCELED = 'canceled'
-    FAILED = 'failed'
-    UNKNOWN = 'unknown'
-
-
+# Core Data Types
 class TextPart(BaseModel):
-    type: Literal['text'] = 'text'
+    model_config = ConfigDict(populate_by_name=True)
     text: str
-    metadata: dict[str, Any] | None = None
-
-
-class FileContent(BaseModel):
-    name: str | None = None
-    mimeType: str | None = None
-    bytes: str | None = None
-    uri: str | None = None
-
-    @model_validator(mode='after')
-    def check_content(self) -> "FileContent":
-        if not (self.bytes or self.uri):
-            raise ValueError(
-                "Either 'bytes' or 'uri' must be present in the file data"
-            )
-        if self.bytes and self.uri:
-            raise ValueError(
-                "Only one of 'bytes' or 'uri' can be present in the file data"
-            )
-        return self
-
 
 class FilePart(BaseModel):
-    type: Literal['file'] = 'file'
-    file: FileContent
-    metadata: dict[str, Any] | None = None
-
+    model_config = ConfigDict(populate_by_name=True)
+    media_type: str = Field(..., alias='mediaType')
+    file_with_uri: Optional[str] = Field(None, alias='fileWithUri')
+    file_with_bytes: Optional[str] = Field(None, alias='fileWithBytes')
+    name: Optional[str] = None
 
 class DataPart(BaseModel):
-    type: Literal['data'] = 'data'
-    data: dict[str, Any]
-    metadata: dict[str, Any] | None = None
+    model_config = ConfigDict(populate_by_name=True)
+    data: Dict[str, Any]
 
-
-Part = Annotated[TextPart | FilePart | DataPart, Field(discriminator='type')]
-
+class Part(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    text: Optional[str] = None
+    file: Optional[FilePart] = None
+    data: Optional[DataPart] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 class Message(BaseModel):
-    role: Literal['user', 'agent']
-    parts: list[Part]
-    metadata: dict[str, Any] | None = None
-
+    model_config = ConfigDict(populate_by_name=True)
+    role: Literal["user", "agent"]
+    parts: List[Part]
+    message_id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias='messageId')
+    context_id: Optional[str] = Field(None, alias='contextId')
+    task_id: Optional[str] = Field(None, alias='taskId')
+    metadata: Optional[Dict[str, Any]] = None
+    extensions: Optional[List[str]] = None
+    reference_task_ids: Optional[List[str]] = Field(None, alias='referenceTaskIds')
 
 class TaskStatus(BaseModel):
-    state: TaskState
-    message: Message | None = None
-    timestamp: datetime = Field(default_factory=datetime.now)
-
-    @field_serializer('timestamp')
-    def serialize_dt(self, dt: datetime, _info):
-        return dt.isoformat()
-
+    model_config = ConfigDict(populate_by_name=True)
+    state: Literal[
+        "submitted", "working", "completed", "failed", "cancelled", 
+        "input-required", "rejected", "auth-required"
+    ]
+    message: Optional[Message] = None
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
 
 class Artifact(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    parts: list[Part]
-    metadata: dict[str, Any] | None = None
-    index: int = 0
-    append: bool | None = None
-    lastChunk: bool | None = None
-
+    model_config = ConfigDict(populate_by_name=True)
+    artifact_id: str = Field(..., alias='artifactId')
+    name: Optional[str] = None
+    description: Optional[str] = None
+    parts: List[Part]
+    metadata: Optional[Dict[str, Any]] = None
+    extensions: Optional[List[str]] = None
 
 class Task(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     id: str
-    sessionId: str | None = None
     status: TaskStatus
-    artifacts: list[Artifact] | None = None
-    history: list[Message] | None = None
-    metadata: dict[str, Any] | None = None
+    context_id: Optional[str] = Field(None, alias='contextId')
+    history: Optional[List[Message]] = None
+    artifacts: Optional[List[Artifact]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
+# Request/Response Types
+class SendMessageRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    message: Message
+    configuration: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class StreamResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    task: Optional[Task] = None
+    message: Optional[Message] = None
+    status_update: Optional[TaskStatusUpdateEvent] = Field(None, alias='statusUpdate')
+    artifact_update: Optional[TaskArtifactUpdateEvent] = Field(None, alias='artifactUpdate')
 
 class TaskStatusUpdateEvent(BaseModel):
-    id: str
+    model_config = ConfigDict(populate_by_name=True)
+    task_id: str = Field(..., alias='taskId')
+    context_id: Optional[str] = Field(None, alias='contextId')
     status: TaskStatus
     final: bool = False
-    metadata: dict[str, Any] | None = None
-
+    metadata: Optional[Dict[str, Any]] = None
 
 class TaskArtifactUpdateEvent(BaseModel):
-    id: str
+    model_config = ConfigDict(populate_by_name=True)
+    task_id: str = Field(..., alias='taskId')
+    context_id: Optional[str] = Field(None, alias='contextId')
     artifact: Artifact
-    metadata: dict[str, Any] | None = None
-
-
-class AuthenticationInfo(BaseModel):
-    model_config = ConfigDict(extra='allow')
-
-    schemes: list[str]
-    credentials: str | None = None
-
-
-class PushNotificationConfig(BaseModel):
-    url: str
-    token: str | None = None
-    authentication: AuthenticationInfo | None = None
-
-
-class TaskIdParams(BaseModel):
-    id: str
-    metadata: dict[str, Any] | None = None
-
-
-class TaskQueryParams(TaskIdParams):
-    historyLength: int | None = None
-
-
-class TaskSendParams(BaseModel):
-    id: str
-    sessionId: str = Field(default_factory=lambda: uuid4().hex)
-    message: Message
-    acceptedOutputModes: list[str] | None = None
-    pushNotification: PushNotificationConfig | None = None
-    historyLength: int | None = None
-    metadata: dict[str, Any] | None = None
-
-
-class TaskPushNotificationConfig(BaseModel):
-    id: str
-    pushNotificationConfig: PushNotificationConfig
-
-
-## RPC Messages
-
-
-class JSONRPCMessage(BaseModel):
-    jsonrpc: Literal['2.0'] = '2.0'
-    id: int | str | None = Field(default_factory=lambda: uuid4().hex)
-
-
-class JSONRPCRequest(JSONRPCMessage):
-    method: str
-    params: dict[str, Any] | None = None
-
-
-class JSONRPCError(BaseModel):
-    code: int
-    message: str
-    data: Any | None = None
-
-
-class JSONRPCResponse(JSONRPCMessage):
-    result: Any | None = None
-    error: JSONRPCError | None = None
-
-
-class SendTaskRequest(JSONRPCRequest):
-    method: Literal['tasks/send'] = 'tasks/send'
-    params: TaskSendParams
-
-
-class SendTaskResponse(JSONRPCResponse):
-    result: Task | None = None
-
-
-class SendTaskStreamingRequest(JSONRPCRequest):
-    method: Literal['tasks/sendSubscribe'] = 'tasks/sendSubscribe'
-    params: TaskSendParams
-
-
-class SendTaskStreamingResponse(JSONRPCResponse):
-    result: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | None = None
-
-
-class GetTaskRequest(JSONRPCRequest):
-    method: Literal['tasks/get'] = 'tasks/get'
-    params: TaskQueryParams
-
-
-class GetTaskResponse(JSONRPCResponse):
-    result: Task | None = None
-
-
-class CancelTaskRequest(JSONRPCRequest):
-    method: Literal['tasks/cancel',] = 'tasks/cancel'
-    params: TaskIdParams
-
-
-class CancelTaskResponse(JSONRPCResponse):
-    result: Task | None = None
-
-
-class SetTaskPushNotificationRequest(JSONRPCRequest):
-    method: Literal['tasks/pushNotification/set',] = (
-        'tasks/pushNotification/set'
-    )
-    params: TaskPushNotificationConfig
-
-
-class SetTaskPushNotificationResponse(JSONRPCResponse):
-    result: TaskPushNotificationConfig | None = None
-
-
-class GetTaskPushNotificationRequest(JSONRPCRequest):
-    method: Literal['tasks/pushNotification/get',] = (
-        'tasks/pushNotification/get'
-    )
-    params: TaskIdParams
-
-
-class GetTaskPushNotificationResponse(JSONRPCResponse):
-    result: TaskPushNotificationConfig | None = None
-
-
-class TaskResubscriptionRequest(JSONRPCRequest):
-    method: Literal['tasks/resubscribe',] = 'tasks/resubscribe'
-    params: TaskIdParams
-
-
-A2ARequest = TypeAdapter(
-    Annotated[
-        SendTaskRequest
-        | GetTaskRequest
-        | CancelTaskRequest
-        | SetTaskPushNotificationRequest
-        | GetTaskPushNotificationRequest
-        | TaskResubscriptionRequest
-        | SendTaskStreamingRequest,
-        Field(discriminator='method'),
-    ]
-)
-
-## Error types
-
-
-class JSONParseError(JSONRPCError):
-    code: int = -32700
-    message: str = 'Invalid JSON payload'
-    data: Any | None = None
-
-
-class InvalidRequestError(JSONRPCError):
-    code: int = -32600
-    message: str = 'Request payload validation error'
-    data: Any | None = None
-
-
-class MethodNotFoundError(JSONRPCError):
-    code: int = -32601
-    message: str = 'Method not found'
-    data: None = None
-
-
-class InvalidParamsError(JSONRPCError):
-    code: int = -32602
-    message: str = 'Invalid parameters'
-    data: Any | None = None
-
-
-class InternalError(JSONRPCError):
-    code: int = -32603
-    message: str = 'Internal error'
-    data: Any | None = None
-
-
-class TaskNotFoundError(JSONRPCError):
-    code: int = -32001
-    message: str = 'Task not found'
-    data: None = None
-
-
-class TaskNotCancelableError(JSONRPCError):
-    code: int = -32002
-    message: str = 'Task cannot be canceled'
-    data: None = None
-
-
-class PushNotificationNotSupportedError(JSONRPCError):
-    code: int = -32003
-    message: str = 'Push Notification is not supported'
-    data: None = None
-
-
-class UnsupportedOperationError(JSONRPCError):
-    code: int = -32004
-    message: str = 'This operation is not supported'
-    data: None = None
-
-
-class ContentTypeNotSupportedError(JSONRPCError):
-    code: int = -32005
-    message: str = 'Incompatible content types'
-    data: None = None
-
-
-class AgentProvider(BaseModel):
-    organization: str
-    url: str | None = None
-
+    append: bool = False
+    last_chunk: bool = Field(False, alias='lastChunk')
+    metadata: Optional[Dict[str, Any]] = None
+
+# Agent Card and Discovery Types
+class AgentExtension(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    uri: str
+    description: Optional[str] = None
+    required: bool = False
+    params: Optional[Dict[str, Any]] = None
 
 class AgentCapabilities(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     streaming: bool = False
-    pushNotifications: bool = False
-    stateTransitionHistory: bool = False
-
-
-class AgentAuthentication(BaseModel):
-    schemes: list[str]
-    credentials: str | None = None
-
+    push_notifications: bool = Field(False, alias='pushNotifications')
+    state_transition_history: bool = Field(False, alias='stateTransitionHistory')
+    extensions: Optional[List[AgentExtension]] = None
 
 class AgentSkill(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     id: str
     name: str
-    description: str | None = None
-    tags: list[str] | None = None
-    examples: list[str] | None = None
-    inputModes: list[str] | None = None
-    outputModes: list[str] | None = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+    examples: Optional[List[str]] = None
+    input_modes: Optional[List[str]] = Field(None, alias='inputModes')
+    output_modes: Optional[List[str]] = Field(None, alias='outputModes')
+    security: Optional[List[Dict[str, Any]]] = None
 
+class AgentInterface(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    protocol_binding: str = Field(default="", alias='protocolBinding')
+    url: str = Field(default="")
+
+class AgentProvider(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    organization: Optional[str] = None
+    url: Optional[str] = None
+
+class SecurityScheme(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    # This is a simplified model. A full implementation would have models for each scheme type.
+    type: str
+    description: Optional[str] = None
 
 class AgentCard(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    protocol_version: str = Field("1.0", alias='protocolVersion')
     name: str
-    description: str | None = None
-    url: str
-    provider: AgentProvider | None = None
-    version: str
-    documentationUrl: str | None = None
-    capabilities: AgentCapabilities
-    authentication: AgentAuthentication | None = None
-    defaultInputModes: list[str] = ['text']
-    defaultOutputModes: list[str] = ['text']
-    skills: list[AgentSkill]
+    description: str
+    provider: Optional[AgentProvider] = None
+    capabilities: Optional[AgentCapabilities] = None
+    skills: Optional[List[AgentSkill]] = None
+    default_input_modes: Optional[List[str]] = Field(None, alias='defaultInputModes')
+    default_output_modes: Optional[List[str]] = Field(None, alias='defaultOutputModes')
+    supported_interfaces: Optional[List[AgentInterface]] = Field(None, alias='supportedInterfaces')
+    security_schemes: Optional[Dict[str, SecurityScheme]] = Field(None, alias='securitySchemes')
+    security: Optional[List[Dict[str, List[str]]]] = None
+    icon_url: Optional[str] = Field(None, alias='iconUrl')
+    documentation_url: Optional[str] = Field(None, alias='documentationUrl')
+    version: Optional[str] = None
+    supports_authenticated_extended_card: bool = Field(False, alias='supportsAuthenticatedExtendedCard')
 
-
-class A2AClientError(Exception):
-    pass
-
-
-class A2AClientHTTPError(A2AClientError):
-    def __init__(self, status_code: int, message: str):
-        self.status_code = status_code
-        self.message = message
-        super().__init__(f'HTTP Error {status_code}: {message}')
-
-
-class A2AClientJSONError(A2AClientError):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(f'JSON Error: {message}')
-
-
-class MissingAPIKeyError(Exception):
-    """Exception for missing API key."""
+    # For backward compatibility during migration
+    url: Optional[str] = None

@@ -5,8 +5,9 @@
 azure-functions
 httpx
 python-dotenv
-pydantic
-semantic-kernel
+pydantic>=2.0
+pydantic-settings>=2.0
+semantic-kernel>=1.30.0
 click
 starlette
 sse-starlette

@@ -25,6 +25,14 @@ from semantic_kernel.contents import (
 )
 from semantic_kernel.functions import kernel_function
 from semantic_kernel.functions.kernel_arguments import KernelArguments
+from samples.common.types import (
+    Message,
+    Part,
+    Task,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+)
 
 
 if TYPE_CHECKING:
@@ -161,41 +169,37 @@ class SemanticKernelTravelAgent:
             ),
         )
 
-    async def send_message(self, message: dict, session_id: str) -> dict[str, Any]:
+    async def send_message(self, message: Message, session_id: str) -> Task:
         """
         Handle synchronous messages (akin to message/send).
 
         Args:
-            message (dict): A structured Message object following the A2A specification.
-                            Expected to include a "role", a list of "parts" (e.g., a text part),
-                            a unique message ID in "messageId", and a fixed "kind" ("message").
+            message (Message): A structured Message object following the A2A v1.0 specification.
             session_id (str): Unique identifier for the session.
 
         Returns:
-            dict: A Task object (or equivalent result) that encapsulates
-                the agent's response, including content, status, and any task-related metadata.
+            Task: A Task object that encapsulates the agent's response.
         """
-        # Ensure the session/thread is established.
-        # await self._ensure_thread_exists(session_id)
-        
-        # Extract the text content from the message parts.
-        # (This example assumes the first 'text' part is the user input.)
         user_text = ""
-        for part in message.get("parts", []):
-            if part.get("kind") == "text":
-                user_text = part.get("text", "")
+        for part in message.parts:
+            if part.text:
+                user_text = part.text
                 break
 
-        # Use the existing underlying mechanism to get a response.
         response = await self.agent.get_response(
             messages=user_text,
             thread=self.thread,
         )
         
-        # Convert the raw response content into a Message structure in line with the A2A spec.
-        return self._get_agent_response(response.content)
+        agent_message = self._get_agent_response(response.content)
+        
+        return Task(
+            id=message.message_id,
+            context_id=session_id,
+            status=TaskStatus(state="completed", message=agent_message),
+        )
 
-    def _get_agent_response(self, content: 'ChatMessageContent') -> dict[str, Any]:
+    def _get_agent_response(self, content: 'ChatMessageContent') -> Message:
         """
         Converts the agent's response content into a structured A2A Message format.
 
@@ -203,43 +207,40 @@ class SemanticKernelTravelAgent:
             content (ChatMessageContent): The content returned by the agent.
 
         Returns:
-            dict: A structured Message object.
+            Message: A structured Message object.
         """
         innerContent = content.content if hasattr(content, 'content') else content
         content_object = json.loads(innerContent) if isinstance(innerContent, str) else innerContent
         if isinstance(content_object, dict) and 'message' in content_object:
             agent_response = content_object['message']
-        return {
-            "role": "agent",
-            "parts": [
-                {
-                    "kind": "text",
-                    "text": agent_response
-                }
-            ],
-            "messageId": str(uuid.uuid4()),
-            "kind": "message"
-        }
+        else:
+            agent_response = str(content_object)
+            
+        return Message(
+            role="agent",
+            parts=[Part(text=agent_response)],
+            message_id=str(uuid.uuid4()),
+        )
 
-    async def stream(self, message_obj: dict, session_id: str) -> AsyncIterable[dict[str, any]]:
+    async def stream(self, message_obj: Message, session_id: str) -> AsyncIterable[dict[str, any]]:
         """
         Streams incremental updates for messages/sendSubscribe.
         Yields structured task updates that follow the A2A protocol in a combined function.
         
         Args:
-        message_obj (dict): Structured message object from the request.
-        session_id (str): Unique session ID.
+            message_obj (Message): Structured message object from the request.
+            session_id (str): Unique session ID.
         
         Yields:
-        dict: A structured A2A task update (incremental or final).
+            dict: A structured A2A task update (incremental or final).
         """
         chunks: list[StreamingChatMessageContent] = []
 
-        # Extract the user text from the message parts.
-        user_input = next(
-            (part.get("text", "") for part in message_obj.get("parts", []) if part.get("kind") == "text"),
-            ""
-        )
+        user_input = ""
+        for part in message_obj.parts:
+            if part.text:
+                user_input = part.text
+                break
 
         tool_call_in_progress = False
         message_in_progress = False
@@ -254,22 +255,19 @@ class SemanticKernelTravelAgent:
                 for item in response_chunk.items
             ):
                 if not tool_call_in_progress:
-                    yield {
-                        "task": {
-                            "id": message_obj.get("messageId"),
-                            "contextId": session_id,
-                            "status": "working",
-                            "message": {
-                                "role": "agent",
-                                "parts": [{
-                                    "kind": "text", 
-                                    "text": "Processing the trip plan (with plugins)..."
-                                }],
-                                "messageId": str(uuid.uuid4()),
-                                "kind": "message"
-                            }
-                        }
-                    }
+                    status_update = TaskStatusUpdateEvent(
+                        task_id=message_obj.message_id,
+                        context_id=session_id,
+                        status=TaskStatus(
+                            state="working",
+                            message=Message(
+                                role="agent",
+                                parts=[Part(text="Processing the trip plan (with plugins)...")],
+                                message_id=str(uuid.uuid4())
+                            )
+                        )
+                    )
+                    yield {"statusUpdate": status_update.model_dump(by_alias=True)}
                     tool_call_in_progress = True
 
             elif any(
@@ -277,22 +275,19 @@ class SemanticKernelTravelAgent:
                 for item in response_chunk.items
             ):
                 if not message_in_progress:
-                    yield {
-                        "task": {
-                            "id": message_obj.get("messageId"),
-                            "contextId": session_id,
-                            "status": "working",
-                            "message": {
-                                "role": "agent",
-                                "parts": [{
-                                    "kind": "text", 
-                                    "text": "Building the trip plan..."
-                                }],
-                                "messageId": str(uuid.uuid4()),
-                                "kind": "message"
-                            }
-                        }
-                    }
+                    status_update = TaskStatusUpdateEvent(
+                        task_id=message_obj.message_id,
+                        context_id=session_id,
+                        status=TaskStatus(
+                            state="working",
+                            message=Message(
+                                role="agent",
+                                parts=[Part(text="Building the trip plan...")],
+                                message_id=str(uuid.uuid4())
+                            )
+                        )
+                    )
+                    yield {"statusUpdate": status_update.model_dump(by_alias=True)}
                     message_in_progress = True
 
                 chunks.append(response_chunk.message)
@@ -318,25 +313,24 @@ class SemanticKernelTravelAgent:
 
         if structured_response and isinstance(structured_response, ResponseFormat):
             final_text = structured_response.message
-            # Use the response status, mapping "completed" as expected.
-            final_state = "completed" if structured_response.status == "completed" else structured_response.status
+            final_state = "completed" if structured_response.status == "completed" else "working"
         else:
             final_text = "We are unable to process your request at the moment. Please try again."
-            final_state = "error"
+            final_state = "failed"
 
         # Yield final update in structured task format.
-        yield {
-            "task": {
-                "id": message_obj.get("messageId"),
-                "contextId": session_id,
-                "status": final_state,
-                "timestamp": timestamp,
-                "message": {
-                    "role": "agent",
-                    "parts": [{"kind": "text", "text": final_text}],
-                    "messageId": str(uuid.uuid4()),
-                    "kind": "message"
-                }
-            }
-        }
+        final_task = Task(
+            id=message_obj.message_id,
+            context_id=session_id,
+            status=TaskStatus(
+                state=final_state,
+                timestamp=timestamp,
+                message=Message(
+                    role="agent",
+                    parts=[Part(text=final_text)],
+                    message_id=str(uuid.uuid4())
+                )
+            )
+        )
+        yield {"task": final_task.model_dump(by_alias=True)}
 # endregion
